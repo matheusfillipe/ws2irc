@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"fmt"
 	"log"
 	"net"
@@ -24,7 +25,7 @@ type Config struct {
 	listen_port    string
 	irc_host       string
 	irc_port       string
-  irc_ssl        bool
+	irc_ssl        bool
 	ssl_cert       string
 	ssl_key        string
 	allowed_origin string
@@ -43,7 +44,7 @@ func makeConfig() Config {
 		listen_port:    os.Getenv("LISTEN_PORT"),
 		irc_host:       os.Getenv("IRC_HOST"),
 		irc_port:       os.Getenv("IRC_PORT"),
-    irc_ssl:        os.Getenv("IRC_USE_SSL") == "true",
+		irc_ssl:        os.Getenv("IRC_USE_SSL") == "true",
 		ssl_cert:       os.Getenv("SSL_CERT"),
 		ssl_key:        os.Getenv("SSL_KEY"),
 		allowed_origin: allowed_origin,
@@ -61,16 +62,25 @@ func makeConfig() Config {
 }
 
 func irc_connect(config Config) net.Conn {
-	tcpAddr, err := net.ResolveTCPAddr("tcp", config.irc_host+":"+config.irc_port)
+
+  addr := config.irc_host+":"+config.irc_port
+	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		println("ResolveTCPAddr failed:", err.Error())
 		return nil
 	}
 	debug("Starting IRC server connection")
 
-	conn, err := net.DialTCP("tcp", nil, tcpAddr)
+	conn, err := func() (net.Conn, error) {
+		if config.irc_ssl {
+			return tls.Dial("tcp", addr, &tls.Config{})
+		} else {
+			return net.DialTCP("tcp", nil, tcpAddr)
+		}
+	}()
+
 	if err != nil {
-		println("Dial failed:", err.Error())
+    println("Failed to connect to irc server:", err.Error())
 		return nil
 	}
 	return conn
@@ -118,11 +128,11 @@ func bridge(ws_conn *websocket.Conn, irc_conn net.Conn) {
 		}
 		debug("Message from websocket client: %s", ws_message)
 
-		// if _, err = irc_conn.Write([]byte(ws_message)); err != nil {
-		// 	log.Println("Error writing : ", err, " to irc server. Closing connection")
-		// 	close()
-		// 	return
-		// }
+		if _, err = irc_conn.Write([]byte(string(ws_message) + "\r\n")); err != nil {
+			log.Println("Error writing : ", err, " to irc server. Closing connection")
+			close()
+			return
+		}
 	}
 }
 
@@ -132,14 +142,13 @@ func main() {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		upgrader := config.upgrader
 		ws_conn, err := upgrader.Upgrade(w, r, nil)
-		defer ws_conn.Close()
 		log.Println("New client from ", r.RemoteAddr)
 		debug("Client origin: %q", r.Header.Get("Origin"))
 		if err != nil {
 			log.Println(err)
 			return
 		}
-    irc_conn := irc_connect(config)
+		irc_conn := irc_connect(config)
 		if irc_conn == nil {
 			return
 		}
