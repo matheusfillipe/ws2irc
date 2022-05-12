@@ -8,6 +8,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -20,6 +22,8 @@ func debug(message string, params ...interface{}) {
 	}
 }
 
+var connected_clients = make(map[string]uint16)
+
 type Config struct {
 	listen_host    string
 	listen_port    string
@@ -29,6 +33,7 @@ type Config struct {
 	ssl_cert       string
 	ssl_key        string
 	allowed_origin string
+	max_per_ip     uint16
 	upgrader       *websocket.Upgrader
 }
 
@@ -39,6 +44,8 @@ func makeConfig() Config {
 	}
 
 	allowed_origin := os.Getenv("ALLOWED_ORIGIN")
+	max_ip, err := strconv.Atoi(os.Getenv("MAX_PER_IP"))
+	max_per_ip := uint16(max_ip)
 	var config = Config{
 		listen_host:    os.Getenv("LISTEN_HOST"),
 		listen_port:    os.Getenv("LISTEN_PORT"),
@@ -48,6 +55,7 @@ func makeConfig() Config {
 		ssl_cert:       os.Getenv("SSL_CERT"),
 		ssl_key:        os.Getenv("SSL_KEY"),
 		allowed_origin: allowed_origin,
+		max_per_ip:     max_per_ip,
 		upgrader: &websocket.Upgrader{
 			ReadBufferSize:  1024,
 			WriteBufferSize: 1024,
@@ -63,7 +71,7 @@ func makeConfig() Config {
 
 func irc_connect(config Config) net.Conn {
 
-  addr := config.irc_host+":"+config.irc_port
+	addr := config.irc_host + ":" + config.irc_port
 	tcpAddr, err := net.ResolveTCPAddr("tcp", addr)
 	if err != nil {
 		println("ResolveTCPAddr failed:", err.Error())
@@ -80,13 +88,13 @@ func irc_connect(config Config) net.Conn {
 	}()
 
 	if err != nil {
-    println("Failed to connect to irc server:", err.Error())
+		println("Failed to connect to irc server:", err.Error())
 		return nil
 	}
 	return conn
 }
 
-func bridge(ws_conn *websocket.Conn, irc_conn net.Conn) {
+func bridge(ws_conn *websocket.Conn, irc_conn net.Conn, client_ip string) {
 	// Read from irc, Write to websocket
 	close := func() {
 		ws_conn.Close()
@@ -140,10 +148,25 @@ func main() {
 	config := makeConfig()
 
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		log.Println("New client from ", r.RemoteAddr)
+
+		client_ip := strings.Split(r.RemoteAddr, ":")[0]
+    if value, ok := connected_clients[client_ip]; ok && value >= config.max_per_ip {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte("403 - Too many ongoing connections from your ip"))
+      println("Bloking it")
+			return
+		}
+		if _, ok := connected_clients[client_ip]; ok {
+			connected_clients[client_ip]++
+		} else {
+			connected_clients[client_ip] = 1
+		}
+
 		upgrader := config.upgrader
 		ws_conn, err := upgrader.Upgrade(w, r, nil)
-		log.Println("New client from ", r.RemoteAddr)
 		debug("Client origin: %q", r.Header.Get("Origin"))
+
 		if err != nil {
 			log.Println(err)
 			return
@@ -152,7 +175,11 @@ func main() {
 		if irc_conn == nil {
 			return
 		}
-		bridge(ws_conn, irc_conn)
+		bridge(ws_conn, irc_conn, client_ip)
+    connected_clients[client_ip]--
+		if value, ok := connected_clients[client_ip]; ok && value <= 1 {
+			delete(connected_clients, client_ip)
+		}
 	})
 
 	if config.ssl_cert != "" && config.ssl_key != "" {
