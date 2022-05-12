@@ -1,41 +1,5 @@
 const DEFAULT_USERNAME = 'websocket'
 
-class IrcHandler {
-  constructor() {
-    let empty = () => {}
-    this._onmessage = empty
-    this._onjoin = empty
-    this._onconnect = empty
-    this._onclose = empty
-    this._onerror = empty
-    this._onopen = empty
-  }
-  onmessage(hook) {
-    this._onmessage = hook
-    return this
-  }
-  onjoin(hook) {
-    this._onjoin = hook
-    return this
-  }
-  onconnect(hook) {
-    this._onconnect = hook
-    return this
-  }
-  onopen(hook) {
-    this._onopen = hook
-    return this
-  }
-  onclose(hook) {
-    this._onclose = hook
-    return this
-  }
-  onerror(hook) {
-    this._onerror = hook
-    return this
-  }
-}
-
 class WsIrcClient {
   constructor(config) {
     let server, port, username, nick, debug
@@ -55,11 +19,20 @@ class WsIrcClient {
       if (this.debug) this.log(c, l)
     }
     this.init = 0
-    this.handler = new IrcHandler()
+    this.reset_hooks()
   }
 
-  handle() {
-    return this.handler
+  reset_hooks() {
+    const empty = () => {}
+    const hook_types = ["onmessage", "onjoin", "onconnect", "onclose", "onerror", "onopen"]
+    for (const hook of hook_types) {
+      const _hook = "_" + hook
+      this[_hook] = empty
+      this[hook] = (f) => {
+        this[_hook] = f.bind(this)
+        return this
+      }
+    }
   }
 
   connect() {
@@ -71,17 +44,17 @@ class WsIrcClient {
     ws.onopen = e => {
       ws.send(`user ${this.username} * * :${this.username}`)
       ws.send(`nick ${this.nick}`)
-      this.handler._onopen(e)
+      this._onopen(e)
     }
     ws.onclose = e => {
       this.log("CLOSED")
-      this.handler._onclose(e)
+      this._onclose(e)
     }
 
     ws.onerror = e => {
       this.log("red", "ERROR")
       fetch("https://" + server).then(c => this.log(c.text()))
-      this.handler._onerror(e)
+      this._onerror(e)
     }
 
     ws.onmessage = m => {
@@ -91,7 +64,7 @@ class WsIrcClient {
       if ((this.init == 0) && (m.data.split(" ")[1] == "376")) {
         this.init = 1
         this.log("orange", "CONNECTED")
-        this.handler._onconnect()
+        this._onconnect()
       }
 
       if (this.init == 1) {
@@ -99,13 +72,13 @@ class WsIrcClient {
         if (type === "PRIVMSG") {
           let from_nick = m.data.split(":")[1].split("!")[0]
           let message = m.data.split(" ").splice(3).join(" ").substring(1)
-          this.handler._onmessage(from_nick, message)
+          this._onmessage(from_nick, message)
           this.deb("blue", from_nick + "> " + message)
 
         } else if (type === "JOIN") {
-          let channel = m.data.split(":")[1].split("!")[0]
+          let channel = m.data.split(":")[2]
           let message = m.data.split(" ").splice(3).join(" ").substring(1)
-          this.handler._onjoin(channel, message)
+          this._onjoin(channel, message)
           this.deb("blue", channel + " joined.")
 
         } else if (m.data.split(" ")[1] === "353") {
@@ -117,7 +90,7 @@ class WsIrcClient {
       }
     }
     this.ws = ws
-    return ws
+    return this
   }
 
   send(nick_or_channel, message) {
@@ -152,25 +125,23 @@ class WsIrcClient {
 
 
 /*  EXAMPLE USAGE
- *
  * let client = new WsIrcClient({
- *  server: "Your bridge address",
- *  port: 7667,
- *  nick: "testman",
- *  debug: true
- *  })
- *  client.handle()
- *  .onmessage(function(from, message) {
- *    console.log(from + "> " + message)
- *    client.send("#room", "Turns out I am an irc bot running on someone's browser!")
- *  })
- *  .onconnect(function() {
- *     client.join("#room")
- *  })
- *  .onjoin(function(channel, message) {
- *     client.send(channel, "Hello!")
- *  })
- *  client.connect()
- *
+ *   server: "yourserver.com",
+ *   port: 7667,
+ *   nick: "echobot",
+ *   // debug: true
+ * })
+ *   .onmessage(function(from, message) {
+ *     console.log(from + "> " + message)
+ *     // this.send("#bots", from + ": Turns out I am an irc bot running on someone's browser!")
+ *     this.send("#bots", from + ": " + message)
+ *   })
+ *   .onconnect(function() {
+ *     this.join("#bots")
+ *   })
+ *   .onjoin(function(channel, message) {
+ *     console.log("Joined " + channel + "> " + message)
+ *     this.send("channel, "Hello!")
+ *   })
+ *   .connect()
  */
- 
