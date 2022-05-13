@@ -24,7 +24,7 @@ class WsIrcClient {
 
   reset_hooks() {
     const empty = () => {}
-    const hook_types = ["onmessage", "onjoin", "onconnect", "onclose", "onerror", "onopen"]
+    const hook_types = ["onmessage", "onjoin", "onconnect", "onclose", "onerror", "onopen", "onnickinuse", "onnames"]
     for (const hook of hook_types) {
       const _hook = "_" + hook
       this[_hook] = empty
@@ -61,7 +61,8 @@ class WsIrcClient {
       if (m.data.indexOf("PING") == 0) ws.send(m.data.replace("PI", "PO"))
       else this.deb("green", "==> " + m.data)
 
-      if ((this.init == 0) && (m.data.split(" ")[1] == "376")) {
+      const irc_code = m.data.split(" ")[1]
+      if ((this.init == 0) && (irc_code == "376")) {
         this.init = 1
         this.log("orange", "CONNECTED")
         this._onconnect()
@@ -70,52 +71,70 @@ class WsIrcClient {
       if (this.init == 1) {
         let type = m.data.split(" ")[1]
         if (type === "PRIVMSG") {
-          let from_nick = m.data.split(":")[1].split("!")[0]
-          let message = m.data.split(" ").splice(3).join(" ").substring(1)
+          const from_nick = m.data.split(":")[1].split("!")[0]
+          const message = m.data.split(" ").splice(3).join(" ").substring(1)
           this._onmessage(from_nick, message)
           this.deb("blue", from_nick + "> " + message)
 
         } else if (type === "JOIN") {
-          let channel = m.data.split(":")[2]
-          let message = m.data.split(" ").splice(3).join(" ").substring(1)
-          this._onjoin(channel, message)
+          const channel = m.data.split(":")[2].trim()
           this.deb("blue", channel + " joined.")
+          this._onjoin(channel)
 
-        } else if (m.data.split(" ")[1] === "353") {
-          if (m.data.split(":")[2][0] === "@") {
-            chan = m.data.split("=")[1].split(" ")[1]
-            ws.send("mode " + chan + " +s");
+        } else {
+          switch (irc_code) {
+            case "433":
+              this.deb("red", "Nickname already in use.")
+              this._onnickinuse()
+              break
+            case "353":
+              const channel = m.data.split("=")[1].split(" ")[1]
+              const names = m.data.split(":").slice(-1)[0].split(" ")
+              this._onnames(channel, names)
+              break
           }
         }
+      } else if (irc_code == "433") {
+        this.deb("red", "Nickname already in use. Trying to change nick.")
+        this.nick = this.nick + "_"
+        this.nick(this.nick)
       }
     }
     this.ws = ws
     return this
   }
 
+  quote(message) {
+    message = message.replace(/\n/g, "")
+    this.deb("orange", "<== " + message)
+    this.ws.send(message)
+  }
   send(nick_or_channel, message) {
-    this.ws.send(`PRIVMSG ${nick_or_channel} :${message}`)
+    this.quote(`PRIVMSG ${nick_or_channel} :${message}`)
+  }
+  nick(new_nick) {
+    this.quote(`nick ${new_nick}`)
   }
   join(channel) {
-    this.ws.send(`JOIN ${channel}`)
+    this.quote(`JOIN ${channel}`)
   }
   part(channel) {
-    this.ws.send(`PART ${channel}`)
+    this.quote(`PART ${channel}`)
   }
   quit(message) {
-    this.ws.send(`QUIT :${message}`)
+    this.quote(`QUIT :${message}`)
   }
   mode(channel, mode) {
-    this.ws.send(`MODE ${channel} ${mode}`)
+    this.quote(`MODE ${channel} ${mode}`)
   }
   kick(channel, nick, message) {
-    this.ws.send(`KICK ${channel} ${nick} :${message}`)
+    this.quote(`KICK ${channel} ${nick} :${message}`)
   }
   topic(channel, topic) {
-    this.ws.send(`TOPIC ${channel} :${topic}`)
+    this.quote(`TOPIC ${channel} :${topic}`)
   }
   names(channel) {
-    this.ws.send(`NAMES ${channel}`)
+    this.quote(`NAMES ${channel}`)
   }
   close() {
     this.quit("bye")
@@ -123,25 +142,28 @@ class WsIrcClient {
   }
 }
 
-
-/*  EXAMPLE USAGE
+/* EXAMPLE USAGE
+ *
  * let client = new WsIrcClient({
- *   server: "yourserver.com",
+ *   server: "server.com",
  *   port: 7667,
  *   nick: "echobot",
  *   // debug: true
  * })
- *   .onmessage(function(from, message) {
+ *   .onmessage(function (from, message) {
  *     console.log(from + "> " + message)
  *     // this.send("#bots", from + ": Turns out I am an irc bot running on someone's browser!")
  *     this.send("#bots", from + ": " + message)
  *   })
- *   .onconnect(function() {
+ *   .onconnect(function () {
  *     this.join("#bots")
  *   })
- *   .onjoin(function(channel, message) {
- *     console.log("Joined " + channel + "> " + message)
- *     this.send("channel, "Hello!")
+ *   .onjoin(function (channel) {
+ *     console.log("Joined " + channel)
+ *     this.send(channel, "Hello!")
+ *   })
+ *   .onnames(function (channel, names) {
+ *     console.log("Names in " + channel + " :" + names.join(" "))
  *   })
  *   .connect()
  */
