@@ -177,7 +177,7 @@ func main() {
 		}
 		bridge(ws_conn, irc_conn, client_ip)
     connected_clients[client_ip]--
-		if value, ok := connected_clients[client_ip]; ok && value <= 1 {
+		if value, ok := connected_clients[client_ip]; ok && value <= 0 {
 			delete(connected_clients, client_ip)
 		}
 	})
